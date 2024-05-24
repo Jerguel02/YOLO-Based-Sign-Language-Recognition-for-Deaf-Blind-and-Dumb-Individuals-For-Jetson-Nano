@@ -1,0 +1,9 @@
+ultralytics
+PyQt5
+pillow
+opencv-python
+pyttsx3
+sounddevice
+pyaudio
+SpeechRecognition
+wave
