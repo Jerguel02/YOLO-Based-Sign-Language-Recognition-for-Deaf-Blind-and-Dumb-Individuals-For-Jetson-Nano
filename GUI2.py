@@ -1,8 +1,9 @@
+import torch
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QTextEdit, QPushButton, QVBoxLayout, QWidget, QHBoxLayout, QGridLayout
 from PyQt5.QtGui import QPixmap, QImage, QFont, QTransform
 from PyQt5.QtCore import QEventLoop, QTimer, Qt, QUrl, pyqtSignal, QThread, QSize, QThreadPool, QRunnable
-from PyQt5.QtMultimedia import QSound
+#from PyQt5.QtMultimedia import QSound
 import sounddevice as sd
 from scipy.io.wavfile import write
 import speech_recognition as sr
@@ -15,6 +16,8 @@ import pyttsx3
 import pyaudio
 import os
 import time
+import modules.utils as utils
+from modules.autobackend import AutoBackend
 
 class ImageLoader(QRunnable):
     def __init__(self, image_path, callback):
@@ -223,21 +226,23 @@ class YOLO_GUI(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(30)  # 30ms
 
-        self.video_source = 0  # Camera
+        #self.video_source = 0  # Camera
+        self.video_source = "/dev/video0"
         self.video = cv2.VideoCapture(self.video_source)
-
+        self.model_path = "YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine"
         self.list_of_emotion = ["anger", "contempt", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
         self.list_of_gesture = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "additional", "alcohol", "allergy", "bacon", "bag", "barbecue", "bill", "biscuit", "bitter", "bread", "burger", "bye", "cake", "cash", "cheese", "chicken", "coke", "cold", "cost", "coupon", "credit card", "cup", "dessert", "drink", "drive", "eat", "eggs", "enjoy", "fork", "french fries", "fresh", "hello", "hot", "icecream", "ingredients", "juicy", "ketchup", "lactose", "lettuce", "lid", "manager", "menu", "milk", "mustard", "napkin", "no", "order", "pepper", "pickle", "pizza", "please", "ready", "receipt", "refill", "repeat", "safe", "salt", "sandwich", "sauce", "small", "soda", "sorry", "spicy", "spoon", "straw", "sugar", "sweet", "thank-you", "tissues", "tomato", "total", "urgent", "vegetables", "wait", "warm", "water", "what", "would", "yoghurt", "your"]
         #self.pre_name_of_emotion = ""
         #self.pre_name_of_gesture = ""
-        self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.pt")
-
+        #self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine")
+        self.model = AutoBackend(self.model_path, device=torch.device('cuda:0'), fp16=True)
+        self.moodel.warmup()
         self.last_detected_time = None
         self.chat_text = ""
         self.emotion_text = ""
         self.engine = pyttsx3.init()
-        self.chat_beep = QSound("beep.wav")
-        self.emotion_beep = QSound("double-beep.wav")
+        #self.chat_beep = QSound("beep.wav")
+        #self.emotion_beep = QSound("double-beep.wav")
 
         self.recording_thread = AudioRecorder()
         self.recording_thread.signal.connect(self._recorded_audio_thread)
@@ -249,7 +254,7 @@ class YOLO_GUI(QMainWindow):
     def update_frame(self):
         ret, frame = self.video.read()
         if ret:
-            results = self.model.predict(frame, show=False)
+            results = self.model.predict(frame, show=False, device = '0')
             if results and len(results[0].boxes) > 0:
                 names = self.model.names
 
@@ -321,13 +326,13 @@ class YOLO_GUI(QMainWindow):
     def submit_chat(self):
         self.timer.stop()
 
-        self.chat_beep.play()
+        ##self.chat_beep.play()
         self.speak_chat()
         loop = QEventLoop()
         QTimer.singleShot(1000, loop.quit)
         loop.exec_()
         self.speak_emotion()
-        self.emotion_beep.play()
+        #self.emotion_beep.play()
         self.chat_text = ""
         self.emotion_text = ""
         self.chat_display.clear()
