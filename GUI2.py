@@ -94,9 +94,9 @@ class YOLO_GUI(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("YOLO-Based Object Detection GUI")
-        #self.setGeometry(100, 100, 800, 600)
-        self.setGeometry(0, 0, QApplication.desktop().screenGeometry().width(), QApplication.desktop().screenGeometry().height())
-        self.showFullScreen()
+        self.setGeometry(100, 100, 800, 600)
+        #self.setGeometry(0, 0, QApplication.desktop().screenGeometry().width(), QApplication.desktop().screenGeometry().height())
+        #self.showFullScreen()
         #Vid Label
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
@@ -234,9 +234,9 @@ class YOLO_GUI(QMainWindow):
         self.list_of_gesture = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "additional", "alcohol", "allergy", "bacon", "bag", "barbecue", "bill", "biscuit", "bitter", "bread", "burger", "bye", "cake", "cash", "cheese", "chicken", "coke", "cold", "cost", "coupon", "credit card", "cup", "dessert", "drink", "drive", "eat", "eggs", "enjoy", "fork", "french fries", "fresh", "hello", "hot", "icecream", "ingredients", "juicy", "ketchup", "lactose", "lettuce", "lid", "manager", "menu", "milk", "mustard", "napkin", "no", "order", "pepper", "pickle", "pizza", "please", "ready", "receipt", "refill", "repeat", "safe", "salt", "sandwich", "sauce", "small", "soda", "sorry", "spicy", "spoon", "straw", "sugar", "sweet", "thank-you", "tissues", "tomato", "total", "urgent", "vegetables", "wait", "warm", "water", "what", "would", "yoghurt", "your"]
         #self.pre_name_of_emotion = ""
         #self.pre_name_of_gesture = ""
-        #self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine")
-        self.model = AutoBackend(self.model_path, device=torch.device('cuda:0'), fp16=True)
-        self.moodel.warmup()
+        self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine")
+        #self.model = AutoBackend(self.model_path, device=torch.device('cuda:0'), fp16=True)
+        #self.moodel.warmup()
         self.last_detected_time = None
         self.chat_text = ""
         self.emotion_text = ""
