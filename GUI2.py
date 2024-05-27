@@ -307,14 +307,22 @@ class YOLO_GUI(QMainWindow):
 
 
     def speak_chat(self):
-        print("Message: " + self.chat_text)
-        self.speak(self.chat_text, 150)
+        if (self.chat_text != ""):
+            print("Message: " + self.chat_text)
+            self.speak(self.chat_text, 150)
+        else:
+            pass
+        self.chat_text = ""
 
 
         
-    def speak_emotion(self):   
-        print("The person you are talking to seems to be: " + self.emotion_text)
-        self.speak("The person you are talking to seems to be: " + self.emotion_text, 150)
+    def speak_emotion(self):
+        if (self.emotion_text != ""):
+            print("The person you are talking to seems to be: " + self.emotion_text)
+            self.speak("The person you are talking to seems to be: " + self.emotion_text, 150)
+        else:
+            pass
+        self.emotion_text = ""
 
 
     def speak(self, text, rate):
@@ -493,6 +501,10 @@ class YOLO_GUI(QMainWindow):
                                     col = 0
                     i += 1
         self.timer.start(30)
+    def closeEvent(self, event):
+        self.deleteLater()
+        event.accept()
+        
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     mainWindow = YOLO_GUI()
