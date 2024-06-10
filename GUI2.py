@@ -1,4 +1,3 @@
-import torch
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QTextEdit, QPushButton, QVBoxLayout, QWidget, QHBoxLayout, QGridLayout
 from PyQt5.QtGui import QPixmap, QImage, QFont, QTransform
@@ -16,9 +15,32 @@ import pyttsx3
 import pyaudio
 import os
 import time
-import modules.utils as utils
-from modules.autobackend import AutoBackend
+import torch
+import Jetson.GPIO as GPIO
 
+class GPIOThread(QThread):
+    submit_chat_btn_pressed = pyqtSignal(int)
+    submit_record_btn_pressed = pyqtSignal(int)
+    def __init__(self):
+        super().__init__()
+        self.submit_chat_btn = 19
+        self.submit_record_btn = 21
+        GPIO.setmode(GPIO.BOARD)
+        GPIO.setup(self.submit_chat_btn, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        GPIO.setup(self.submit_record_btn, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+        GPIO.add_event_detect(self.submit_chat_btn, GPIO.RISING, callback=self.submit_chat_callback, bouncetime=300)
+
+        GPIO.add_event_detect(self.submit_record_btn, GPIO.RISING, callback=self.submit_record_callback, bouncetime=300)
+    def run(self):
+        while True:
+            time.sleep(1)
+
+    def submit_chat_callback(self, channel):
+        self.submit_chat_btn_pressed.emit(channel)
+
+    def submit_record_callback(self, channel):
+        self.submit_record_btn_pressed.emit(channel)
 class ImageLoader(QRunnable):
     def __init__(self, image_path, callback):
         super().__init__()
@@ -32,7 +54,8 @@ class ImageLoader(QRunnable):
 
 class AudioRecorder(QThread):
     signal = pyqtSignal(str)
-    #recording_signal = pyqtSignal(bool)
+    recording_signal = pyqtSignal(bool)
+
     def __init__(self):
         super().__init__()
         self.audio_filename = "audio/AUDIO.wav"
@@ -43,39 +66,47 @@ class AudioRecorder(QThread):
         self.CHANNELS = 1
         self.FS = 44100
         self.DURATION = 10
+        self.p = None
+        self.stream = None
 
     def run(self):
-        #recording = True
-        p = pyaudio.PyAudio()
-        stream = p.open(format=self.SAMPLE_FORMAT,
-                        channels=self.CHANNELS,
-                        rate=self.FS,
-                        frames_per_buffer=self.CHUNK,
-                        input=True)
-        frames = []
+        self.recording = True
+        self.recording_signal.emit(self.recording)
+        
+        self.p = pyaudio.PyAudio()
+        self.stream = self.p.open(format=self.SAMPLE_FORMAT,
+                                  channels=self.CHANNELS,
+                                  rate=self.FS,
+                                  frames_per_buffer=self.CHUNK,
+                                  input=True)
+        
+        self.frames = []
         for _ in range(0, int(self.FS / self.CHUNK * self.DURATION)):
             if self.recording:
-                data = stream.read(self.CHUNK)
-                frames.append(data)
-            else:
+                data = self.stream.read(self.CHUNK)
+                self.frames.append(data)
+            else: 
                 break
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-    
+        self.stop_recording()
+
+    def stop_recording(self):
+
+        self.stream.stop_stream()
+        self.stream.close()
+        self.p.terminate()
+        
         with wave.open(self.audio_filename, 'wb') as wf:
             wf.setnchannels(self.CHANNELS)
-            wf.setsampwidth(p.get_sample_size(self.SAMPLE_FORMAT))
+            wf.setsampwidth(self.p.get_sample_size(self.SAMPLE_FORMAT))
             wf.setframerate(self.FS)
-            wf.writeframes(b''.join(frames))
-    
+            wf.writeframes(b''.join(self.frames))
+        
         recognized_text = self.recognize_speech(self.audio_filename)
-        recording = False
-        #self.recording_signal.emit(recording)
-        self.signal.emit(recognized_text)
-    def stop_recording(self):
-        print("Thread is terminating...")
         self.recording = False
+        self.recording_signal.emit(self.recording)
+        self.signal.emit(recognized_text)
+        recognized_text = ""
+        print("Thread is terminating...")
 
     def recognize_speech(self, filename):
         with sr.AudioFile(filename) as source:
@@ -84,10 +115,37 @@ class AudioRecorder(QThread):
                 text = self.recognizer.recognize_google(audio_data)
                 print("Recognized text:", text)
                 return text
-            except (sr.UnknownValueError, sr.RequestError) as e:
+            except (sr.UnknownValueError, sr.RequestError, OSError) as e:
                 print(f"Speech recognition error: {e}")
                 return ""
 
+class SpeakThread(QThread):
+    finished_signal = pyqtSignal()
+
+    def __init__(self, text, rate):
+        super().__init__()
+        self.text = text
+        self.rate = rate
+        self.engine = pyttsx3.init()
+        self._is_running = True
+
+    def run(self):
+        self.engine.setProperty('rate', self.rate)
+        self.engine.say(self.text)
+        self.engine.startLoop(False)
+        while self._is_running:
+            self.engine.iterate()
+
+        self.engine.endLoop()
+        self.finished_signal.emit()
+    def stop_speaking(self):
+        self._is_running = False
+        if self.engine.isBusy():
+            self.engine.stop()
+
+    def stop(self):
+        self._is_running = False
+        self.engine.stop()
 
 class YOLO_GUI(QMainWindow):
     def __init__(self):
@@ -123,8 +181,11 @@ class YOLO_GUI(QMainWindow):
         self.submit_button.setMaximumHeight(30) 
         self.submit_button.setMaximumWidth(100)
         self.submit_button.clicked.connect(self.submit_chat)
-
-        
+        self.stop_speak_btn = QPushButton("Cancel", self)
+        self.stop_speak_btn.setMaximumHeight(30) 
+        self.stop_speak_btn.setMaximumWidth(100)
+        self.stop_speak_btn.clicked.connect(self.stop_speak)
+        self.stop_speak_btn.setVisible(False)
 
         #--------
         #self.sign_language_label = QLabel(self)
@@ -179,7 +240,7 @@ class YOLO_GUI(QMainWindow):
         self.image_logo = QLabel(self)
         self.image_logo.setPixmap(self.logo.scaled(60,70,Qt.KeepAspectRatio))
         self.image_logo.setAlignment(Qt.AlignCenter)
-            
+    
 
         main_layout = QVBoxLayout()
         
@@ -190,7 +251,7 @@ class YOLO_GUI(QMainWindow):
         emotion_layout.addWidget(self.emotion_label)
         emotion_layout.addWidget(self.emotion_display)
         emotion_layout.addWidget(self.submit_button)
-        
+        emotion_layout.addWidget(self.stop_speak_btn)
         text_record_layout= QHBoxLayout()
         text_record_layout.addWidget(self.text_record_label)
         text_record_layout.addWidget(self.text_record_display)
@@ -226,15 +287,18 @@ class YOLO_GUI(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(30)  # 30ms
 
-        #self.video_source = 0  # Camera
-        self.video_source = "/dev/video0"
+        self.video_source = 0  # Camera
+        #self.video_source = "/dev/video0"
         self.video = cv2.VideoCapture(self.video_source)
-        self.model_path = "YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine"
+        #self.model_path = "YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine"
         self.list_of_emotion = ["anger", "contempt", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
         self.list_of_gesture = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "additional", "alcohol", "allergy", "bacon", "bag", "barbecue", "bill", "biscuit", "bitter", "bread", "burger", "bye", "cake", "cash", "cheese", "chicken", "coke", "cold", "cost", "coupon", "credit card", "cup", "dessert", "drink", "drive", "eat", "eggs", "enjoy", "fork", "french fries", "fresh", "hello", "hot", "icecream", "ingredients", "juicy", "ketchup", "lactose", "lettuce", "lid", "manager", "menu", "milk", "mustard", "napkin", "no", "order", "pepper", "pickle", "pizza", "please", "ready", "receipt", "refill", "repeat", "safe", "salt", "sandwich", "sauce", "small", "soda", "sorry", "spicy", "spoon", "straw", "sugar", "sweet", "thank-you", "tissues", "tomato", "total", "urgent", "vegetables", "wait", "warm", "water", "what", "would", "yoghurt", "your"]
         #self.pre_name_of_emotion = ""
         #self.pre_name_of_gesture = ""
-        self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine")
+        self.device = 'cuda' if torch.cuda.is_available else 'cpu'
+        print(f'Using device: {self.device}')
+        self.model = YOLO("YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.pt", task = "detect")
+        self.model.to(self.device)
         #self.model = AutoBackend(self.model_path, device=torch.device('cuda:0'), fp16=True)
         #self.moodel.warmup()
         self.last_detected_time = None
@@ -248,13 +312,45 @@ class YOLO_GUI(QMainWindow):
         self.recording_thread.signal.connect(self._recorded_audio_thread)
         self.latch_count = 0
         self.latch_word = ""
-        self.flipped = False
-        self.rotate_angle = 0
-        
+        self.speaking_status = "None"
+        self.recording_status = "None"
+        self.submit_chat_btn = 19
+        self.submit_record_btn = 21
+        self.recording_flag = False
+        self.speak_thread = None
+
+        self.gpio_thread = GPIOThread()
+        self.gpio_thread.start()
+
+
+        self.gpio_thread.submit_chat_btn_pressed.connect(self.submit_chat_on)
+        self.gpio_thread.submit_record_btn_pressed.connect(self.submit_record_on)
+        print("The GUI is starting...")
+    def submit_chat_on(self, channel):
+        print(f"Submit chat button pressed on channel {channel}")
+        print("Speaking status: ", self.speaking_status)
+        if self.speaking_status == "None":
+            self.submit_chat()
+        elif self.speaking_status == "Speaking":
+            self.stop_speak()
+        elif self.speaking_status == "Stopping":
+            pass
+    
+    def submit_record_on(self, channel):
+        print(f"Submit record button pressed on channel {channel}")
+        print("Recording status: ", self.recording_status)
+        if (self.recording_status == "None"):
+            self.record_audio()
+        elif (self.recording_status == "Recording"):
+            self.stop_record()
+        elif (self.recording_status == "Stopping"):
+            pass
+
+
     def update_frame(self):
         ret, frame = self.video.read()
         if ret:
-            results = self.model.predict(frame, show=False, device = '0')
+            results = self.model.predict(frame, show=False, device = self.device)
             if results and len(results[0].boxes) > 0:
                 names = self.model.names
 
@@ -307,47 +403,76 @@ class YOLO_GUI(QMainWindow):
 
 
     def speak_chat(self):
-        if (self.chat_text != ""):
+        if self.chat_text != "":
             print("Message: " + self.chat_text)
             self.speak(self.chat_text, 150)
         else:
             pass
-        self.chat_text = ""
-
-
-        
-    def speak_emotion(self):
+        loop = QEventLoop()
+        QTimer.singleShot(2000, loop.quit)
+        loop.exec_()
         if (self.emotion_text != ""):
             print("The person you are talking to seems to be: " + self.emotion_text)
             self.speak("The person you are talking to seems to be: " + self.emotion_text, 150)
         else:
             pass
         self.emotion_text = ""
+        self.chat_text = ""
+        
+#  def speak_emotion(self):
+
 
 
     def speak(self, text, rate):
-        
-        self.engine.setProperty('rate', rate)
-        self.engine.say(text)
-        self.engine.runAndWait() 
+        if self.speak_thread and self.speak_thread.isRunning():
+            self.speak_thread.stop()
+            self.speak_thread.wait()
+    
+        # Create a new speech thread and start speaking
+        self.speak_thread = SpeakThread(text, rate)
+        self.speak_thread.finished_signal.connect(self.on_speak_finished)
+        self.speak_thread.start()
+
+    def on_speak_finished(self):
+        self.submit_button.setEnabled(True)
+        self.stop_speak_btn.setVisible(False)
+        self.stop_speak_btn.setEnabled(False)
 
     def submit_chat(self):
+        self.speaking_status = "Speaking"
+        self.submit_button.setEnabled(False)
+        
+        self.submit_button.setVisible(False)
+        self.stop_speak_btn.setVisible(True)
+        self.stop_speak_btn.setEnabled(True)
         self.timer.stop()
-
-        ##self.chat_beep.play()
+    
         self.speak_chat()
+        QTimer.singleShot(3000, self.stop_speak)
+        
+
+    def stop_speak(self):
+        self.stopping_status = "Stopping"
+        self.stop_speak_btn.setEnabled(False)
         loop = QEventLoop()
-        QTimer.singleShot(1000, loop.quit)
+        QTimer.singleShot(100, loop.quit)
         loop.exec_()
-        self.speak_emotion()
-        #self.emotion_beep.play()
         self.chat_text = ""
         self.emotion_text = ""
         self.chat_display.clear()
         self.emotion_display.clear()
-        self.timer.start(30)
+        if self.speak_thread and self.speak_thread.isRunning():
+            self.speak_thread.stop_speaking()
+            self.speak_thread.wait()
+        self.stop_speak_btn.setVisible(False)
+        self.submit_button.setVisible(True)
+        self.submit_button.setEnabled(True)
+
+        self.timer.start(30) 
+        self.speaking_status = "None"   
     #==================================================================
     def record_audio(self):
+        self.recording_status = "Recording"
         for i in reversed(range(self.sign_language_layout.count())):
             item = self.sign_language_layout.itemAt(i)
 
@@ -366,38 +491,53 @@ class YOLO_GUI(QMainWindow):
         self.recording_thread.start()
 
     def stop_record(self):
+        self.recording_status = "Stopping"
         self.stop_record_button.setEnabled(False)
-        self.recording_thread.stop_recording()
-        
+        self.recording_label.setVisible(False)
         loop = QEventLoop()
-        QTimer.singleShot(3000, loop.quit)
+        QTimer.singleShot(50, loop.quit)
         loop.exec_()
-        
+        self.stop_recording_label.setVisible(True)
+        self.recording_thread.recording = False
+        self.recording_thread.wait()
+        self.recording_thread.stop_recording()
+
+        #self.display_sign_language_image(recognized_text)
+        QTimer.singleShot(500, loop.quit)
+        loop.exec_()
+        self.stop_record_button.setVisible(False)
+
         self.record_button.setVisible(True)
-        
+        self.record_button.setEnabled(True)
+        print("Recorded")
+        self.recording_status = "None"
 
     def _recorded_audio_thread(self, recognized_text):
         if isinstance(recognized_text, str):  
             self.text_record_display.setPlainText(recognized_text)
             self.stop_record_button.setEnabled(False)
             self.display_sign_language_image(recognized_text)
-            self.recording_thread.stop_recording()
+            #self.recording_thread.stop_recording()
             
+        else:
+            print("Error: recognized_text is not a string")
             self.stop_recording_label.setVisible(False)
             self.stop_record_button.setVisible(False)
             self.record_button.setVisible(True)
-        else:
-            print("Error: recognized_text is not a string")
+        print("Recorded")
+        self.recording_status = "None"
 
     def display_sign_language_image(self, words):
         self.timer.stop()
 
         self.recording_label.setVisible(False)
         self.stop_recording_label.setVisible(True)
+        self.stop_record_button.setEnabled(False)
         loop = QEventLoop()
-        QTimer.singleShot(3000, loop.quit)
+        QTimer.singleShot(2000, loop.quit)
         loop.exec_()
         text_to_images = words.split(' ')
+        max_col = 8
         row = 0
         col = 0
         self.stop_recording_label.setVisible(False)
@@ -421,7 +561,7 @@ class YOLO_GUI(QMainWindow):
                 label.setScaledContents(True)
                 self.sign_language_layout.addWidget(label, row, col)
                 col += 1
-                if col == 12:
+                if col == max_col:
                     row += 1
                     col = 0
         else: 
@@ -459,7 +599,7 @@ class YOLO_GUI(QMainWindow):
     
                         self.sign_language_layout.addWidget(label, row, col)
                         col += 1
-                        if col == 12:
+                        if col == max_col:
                             row += 1
                             col = 0
                     i += j
@@ -477,7 +617,7 @@ class YOLO_GUI(QMainWindow):
     
                         self.sign_language_layout.addWidget(label, row, col)
                         col += 1
-                        if col == 12:
+                        if col == max_col:
                             row += 1
                             col = 0
                         i += 1
@@ -496,14 +636,21 @@ class YOLO_GUI(QMainWindow):
             
                                 self.sign_language_layout.addWidget(label, row, col)
                                 col += 1
-                                if col == 12:
+                                if col == max_col:
                                     row += 1
                                     col = 0
                     i += 1
+        self.recording_flag = False
+        #self.stop_recording_label.setVisible(False)
+        self.stop_record_button.setVisible(False)
+        self.record_button.setVisible(True)
+        self.record_button.setEnabled(True)
         self.timer.start(30)
     def closeEvent(self, event):
+        GPIO.cleanup()
         self.deleteLater()
         event.accept()
+        print("Exited!")
         
 if __name__ == "__main__":
     app = QApplication(sys.argv)
