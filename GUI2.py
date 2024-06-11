@@ -41,16 +41,6 @@ class GPIOThread(QThread):
 
     def submit_record_callback(self, channel):
         self.submit_record_btn_pressed.emit(channel)
-class ImageLoader(QRunnable):
-    def __init__(self, image_path, callback):
-        super().__init__()
-        self.image_path = image_path
-        self.callback = callback
-
-    def run(self):
-        image = QPixmap(self.image_path)
-        self.callback(image)
-
 
 class AudioRecorder(QThread):
     signal = pyqtSignal(str)
@@ -87,10 +77,6 @@ class AudioRecorder(QThread):
                 self.frames.append(data)
             else: 
                 break
-        self.stop_recording()
-
-    def stop_recording(self):
-
         self.stream.stop_stream()
         self.stream.close()
         self.p.terminate()
@@ -102,11 +88,16 @@ class AudioRecorder(QThread):
             wf.writeframes(b''.join(self.frames))
         
         recognized_text = self.recognize_speech(self.audio_filename)
-        self.recording = False
+        
         self.recording_signal.emit(self.recording)
         self.signal.emit(recognized_text)
         recognized_text = ""
+        self.stop_recording()
+
+    def stop_recording(self):
+        self.recording = False
         print("Thread is terminating...")
+
 
     def recognize_speech(self, filename):
         with sr.AudioFile(filename) as source:
@@ -122,30 +113,53 @@ class AudioRecorder(QThread):
 class SpeakThread(QThread):
     finished_signal = pyqtSignal()
 
-    def __init__(self, text, rate):
+    def __init__(self, text_1st, text_2nd, rate):
         super().__init__()
-        self.text = text
+        self.text_1st = text_1st
+        self.text_2nd = text_2nd
         self.rate = rate
-        self.engine = pyttsx3.init()
-        self._is_running = True
-
+        
+        self.status = "None"
+        self.engine1 = pyttsx3.init()
+        self.engine2 = pyttsx3.init()
     def run(self):
-        self.engine.setProperty('rate', self.rate)
-        self.engine.say(self.text)
-        self.engine.startLoop(False)
-        while self._is_running:
-            self.engine.iterate()
-
-        self.engine.endLoop()
+        self.status = "Start engine1"
+        while self.status == "Start engine1":
+            self.engine1.setProperty('rate', self.rate)
+            voices = self.engine1.getProperty('voices')
+            for voice in voices:
+                if "Microsoft David Desktop - English (United States)" in voice.name:
+                    self.engine1.setProperty('voice', voice.id)
+                    break
+            self.engine1.setProperty('voice', voices[0])
+            self.engine1.say(self.text_1st)
+            self.engine1.startLoop(False)
+            self.engine1.iterate()
+            self.engine1.endLoop()
+            if self.status != "None":
+                self.status = "Start engine2"
+        while self.status == "Start engine2":
+            self.engine2.setProperty('rate', self.rate)
+            voices = self.engine2.getProperty('voices')
+            for voice in voices:
+                if "Microsoft Zira Desktop - English (United States)" in voice.name:
+                    self.engine2.setProperty('voice', voice.id)
+                    break
+            self.engine2.setProperty('voice', voices[1])
+            self.engine2.say(self.text_2nd)
+            self.engine2.startLoop(False)
+            self.engine2.iterate()
+            self.engine2.endLoop()
+            self.status = "None"
         self.finished_signal.emit()
+        print("Completed!")
+        #self.stop_speaking()
     def stop_speaking(self):
-        self._is_running = False
-        if self.engine.isBusy():
-            self.engine.stop()
-
-    def stop(self):
-        self._is_running = False
-        self.engine.stop()
+        self.status = "None"
+        #if self.engine.isBusy():
+        self.engine1.stop()
+        self.engine2.stop()
+        print("Thread is terminating")
 
 class YOLO_GUI(QMainWindow):
     def __init__(self):
@@ -287,8 +301,8 @@ class YOLO_GUI(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(30)  # 30ms
 
-        self.video_source = 0  # Camera
-        #self.video_source = "/dev/video0"
+        #self.video_source = 0  # Camera
+        self.video_source = "/dev/video0"
         self.video = cv2.VideoCapture(self.video_source)
         #self.model_path = "YOLOv8Checkpoint/YOLOv8Checkpoint/train4/weights/best.engine"
         self.list_of_emotion = ["anger", "contempt", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
@@ -318,14 +332,14 @@ class YOLO_GUI(QMainWindow):
         self.submit_record_btn = 21
         self.recording_flag = False
         self.speak_thread = None
-
+        print("The GUI is starting...")
         self.gpio_thread = GPIOThread()
         self.gpio_thread.start()
 
 
         self.gpio_thread.submit_chat_btn_pressed.connect(self.submit_chat_on)
         self.gpio_thread.submit_record_btn_pressed.connect(self.submit_record_on)
-        print("The GUI is starting...")
+        
     def submit_chat_on(self, channel):
         print(f"Submit chat button pressed on channel {channel}")
         print("Speaking status: ", self.speaking_status)
@@ -350,43 +364,34 @@ class YOLO_GUI(QMainWindow):
     def update_frame(self):
         ret, frame = self.video.read()
         if ret:
-            results = self.model.predict(frame, show=False, device = self.device)
-            if results and len(results[0].boxes) > 0:
-                names = self.model.names
-
-                for i, det in enumerate(results[0].boxes.xyxy):
-                    x1, y1, x2, y2 = map(int, det[:4])
-                    cls = int(results[0].boxes.cls[i])
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    cv2.putText(frame, names[cls], (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                    if len(names[cls]) > 0 :
-                        #current_detected_time = datetime.now()
-                        
-                    #if self.pre_name_of_gesture != names[cls]:
-                        #if self.last_detected_time is not None:
-                        #time_difference = (current_detected_time - self.last_detected_time).total_seconds()
-                        objects = "".join(names[int(cls)])
-                        #if time_difference >= 1:
-                        for c in self.list_of_gesture:
-                            if c == names[int(cls)]:
-                                self.detection_deadline(names[int(cls)])
-                                if self.latch_count == 10:
-                                    self.chat_text += f"{objects} "
-                                    self.chat_display.insertPlainText(f"{objects} ")
-                                    #self.pre_name_of_gesture = names[cls]
-                                    self.latch_count = 0
+            if self.speaking_status == "None":
+                results = self.model.predict(frame, show=False, device = self.device)
+                if results and len(results[0].boxes) > 0:
+                    names = self.model.names
+    
+                    for i, det in enumerate(results[0].boxes.xyxy):
+                        x1, y1, x2, y2 = map(int, det[:4])
+                        cls = int(results[0].boxes.cls[i])
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                        cv2.putText(frame, names[cls], (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        if len(names[cls]) > 0 :
+                            objects = "".join(names[int(cls)])
+                            #if time_difference >= 1:
+                            for c in self.list_of_gesture:
+                                if c == names[int(cls)]:
+                                    self.detection_deadline(names[int(cls)])
+                                    if self.latch_count == 10:
+                                        self.chat_text += f"{objects} "
+                                        self.chat_display.insertPlainText(f"{objects} ")
+                                        self.latch_count = 0
+                                        break
+                            for c in self.list_of_emotion:
+                                if c == names[int(cls)]:
+                                    self.emotion_display.clear()
+                                    self.emotion_text = f"{objects}"
+                                    self.emotion_display.insertPlainText(f"{objects}") 
                                     break
-                    #if self.pre_name_of_emotion != names[cls]:
-                        #objects = "".join(names[int(cls)])
-                        for c in self.list_of_emotion:
-                            if c == names[int(cls)]:
-                                self.emotion_display.clear()
-                                self.emotion_text = f"{objects}"
-                                self.emotion_display.insertPlainText(f"{objects}") 
-                                #self.pre_name_of_emotion = names[cls]
-                                break
-                        #self.last_detected_time = current_detected_time
-                                    
+                                        
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = frame_rgb.shape
             bytesPerLine = ch * w
@@ -403,73 +408,52 @@ class YOLO_GUI(QMainWindow):
 
 
     def speak_chat(self):
+        text_1st = ""
+        text_2nd = ""
+        rate = 150
+        if self.speak_thread and self.speak_thread.isRunning():
+            self.speak_thread.stop_speaking()
+            self.speak_thread.wait()
         if self.chat_text != "":
             print("Message: " + self.chat_text)
-            self.speak(self.chat_text, 150)
+            text_1st = text_1st + self.chat_text
         else:
             pass
-        loop = QEventLoop()
-        QTimer.singleShot(2000, loop.quit)
-        loop.exec_()
         if (self.emotion_text != ""):
             print("The person you are talking to seems to be: " + self.emotion_text)
-            self.speak("The person you are talking to seems to be: " + self.emotion_text, 150)
+            text_2nd = text_2nd + "The person you are talking to seems to be: " + self.emotion_text
         else:
             pass
-        self.emotion_text = ""
-        self.chat_text = ""
-        
-#  def speak_emotion(self):
-
-
-
-    def speak(self, text, rate):
-        if self.speak_thread and self.speak_thread.isRunning():
-            self.speak_thread.stop()
-            self.speak_thread.wait()
-    
-        # Create a new speech thread and start speaking
-        self.speak_thread = SpeakThread(text, rate)
+        self.speak_thread = SpeakThread(text_1st, text_2nd, rate)
         self.speak_thread.finished_signal.connect(self.on_speak_finished)
         self.speak_thread.start()
 
+        
+
     def on_speak_finished(self):
-        self.submit_button.setEnabled(True)
-        self.stop_speak_btn.setVisible(False)
+        self.speaking_status = "Stopping"
         self.stop_speak_btn.setEnabled(False)
-
-    def submit_chat(self):
-        self.speaking_status = "Speaking"
-        self.submit_button.setEnabled(False)
-        
-        self.submit_button.setVisible(False)
-        self.stop_speak_btn.setVisible(True)
-        self.stop_speak_btn.setEnabled(True)
-        self.timer.stop()
-    
-        self.speak_chat()
-        QTimer.singleShot(3000, self.stop_speak)
-        
-
-    def stop_speak(self):
-        self.stopping_status = "Stopping"
-        self.stop_speak_btn.setEnabled(False)
-        loop = QEventLoop()
-        QTimer.singleShot(100, loop.quit)
-        loop.exec_()
+        #if self.speak_thread and self.speak_thread.isRunning():
+        self.speak_thread.stop_speaking()
+        self.speak_thread.wait()
         self.chat_text = ""
         self.emotion_text = ""
         self.chat_display.clear()
         self.emotion_display.clear()
-        if self.speak_thread and self.speak_thread.isRunning():
-            self.speak_thread.stop_speaking()
-            self.speak_thread.wait()
-        self.stop_speak_btn.setVisible(False)
-        self.submit_button.setVisible(True)
         self.submit_button.setEnabled(True)
+        self.submit_button.setVisible(True)
+        self.stop_speak_btn.setVisible(False)
+        self.speaking_status = "None" 
+    def submit_chat(self):
+        self.speaking_status = "Speaking"
+        self.submit_button.setEnabled(False)
+        self.submit_button.setVisible(False)
+        self.stop_speak_btn.setVisible(True)
+        self.stop_speak_btn.setEnabled(True)
+        self.speak_chat()
 
-        self.timer.start(30) 
-        self.speaking_status = "None"   
+    def stop_speak(self):
+        self.on_speak_finished()
     #==================================================================
     def record_audio(self):
         self.recording_status = "Recording"
